@@ -1,27 +1,34 @@
-/**********************************************************
- * Project: M5 Stack GSM Wardriver Rev 1.00               *
- * Purpose: Collect Celltower locations for wigle.net     *
- * Author : Jilles Groenendijk                            *
- * Date   : 2023-04-22                                    *
- * Note   : Special thanks to Joseph Hewitt for helping   *
- *          with the code. Get a https://www.wardriver.uk *
- *                                                        *
- * Revisions:                                             *
- * 0.99 (2023-04-16) Initial Release                      *
- * 1.00 (2023-04-22) Complete rewrite                     *
- **********************************************************/ 
+/***********************************************************
+ * Project: M5 Stack GSM Wardriver Rev 1.00                *
+ * Purpose: Collect Celltower locations for wigle.net      *
+ * Author : Jilles Groenendijk                             *
+ * Date   : 2023-04-22                                     *
+ * Note   : Special thanks to Joseph Hewitt for helping    *
+ *          with the code. Get a https://www.wardriver.uk  *
+ *          Support for OpenCellID:                        *
+ *          https://wiki.opencellid.org/wiki/API#Payload_2 *
+ *                                                         *
+ * Revisions:                                              *
+ * 0.99 (2023-04-16) Initial Release                       *
+ * 1.00 (2023-04-22) Complete rewrite                      *
+ * 1.01 (2023-04-22) OpenCellID Support                    *
+ ***********************************************************/ 
 
 #include <M5Stack.h>
 #include <TinyGPS++.h> // http://arduiniana.org/libraries/tinygpsplus/
 
 const unsigned long RESPONSE_TIMEOUT = 20000;
 TinyGPSPlus gps;
+String version = "R1.0.1";
 char current_filename[32] = "";
 int lastdate = 0;
 String celltowers = "";
 unsigned long unique_celltowers = 0;
+unsigned long total_celltowers = 0;
 unsigned long filesize = 0;
-File fh;  
+File wigle_fh;  
+File opencid_fh;  
+File uniq_fh;  
 
 String sendATCommand(String command) {
   unsigned long startTime = millis();
@@ -71,12 +78,12 @@ void listDir(fs::FS &fs, const char *dirname, uint8_t levels) {
               } else {
                 sprintf(directory,"%s/%s",dirname,file.name());
               }
-              // SD.rmdir(directory);
+              //SD.rmdir(directory);
               listDir(fs, directory, levels - 1);
             }
         } else {
             fullname=String(dirname)+"/"+String(file.name());
-            // SD.remove(fullname);
+            //SD.remove(fullname);
             Serial.print("  FILE: ");Serial.print(fullname);
             Serial.print("  SIZE: ");Serial.println(file.size());
         }
@@ -85,14 +92,66 @@ void listDir(fs::FS &fs, const char *dirname, uint8_t levels) {
 }
 
 void openfile() {
-  String filename = "";
-  if(String(current_filename).length()!=0) {
-    SD.mkdir(String(current_filename).substring(0,5));
-    SD.mkdir(String(current_filename).substring(0,12));
-    filename=String(current_filename);
-    fh = SD.open(filename,FILE_APPEND);      
-    Serial.println(filename);
+  String filepath = "";
+  bool newfile=true;
+
+  filepath="/wigle"+String(current_filename);
+
+  if(filepath.length()!=0) {
+    filepath.replace(".csv",".key");
+    SD.mkdir(filepath.substring(0, 6));       // /wigle
+    SD.mkdir(filepath.substring(0,11));       // /wigle/yyyy
+    SD.mkdir(filepath.substring(0,18));       // /wigle/yyyy/yyyymm    
+    
+    // CVS file exists
+    if( SD.exists(filepath) ) {
+      // Unique file exists
+      filepath.replace(".csv",".key");
+      if( SD.exists(filepath) ) {
+        // Open .key file read all celltowers
+
+        uniq_fh = SD.open(filepath,FILE_READ); 
+        if (uniq_fh) {
+          celltowers="";
+        	while (uniq_fh.available()) {
+		        char charRead = uniq_fh.read();
+		        celltowers += charRead;
+	        }
+          uniq_fh.close();
+        }
+        Serial.println("Unique celltowers:"+celltowers);
+	    }
+    }
+
+    uniq_fh = SD.open(filepath,FILE_WRITE);  // /wigle/yyyy/yyyymm/yyyymmdd.key
+    Serial.println(filepath);
+
+    filepath.replace(".key",".csv");
+    newfile=!SD.exists(filepath);
+    wigle_fh = SD.open(filepath,FILE_APPEND); // /wigle/yyyy/yyyymm/yyyymmdd.csv
+    Serial.println(filepath);
+    if(newfile) {
+      wigle_fh.println("WigleWifi-1.4,appRelease=1.0.1,model=M5Stack GSM Wardriver Rev1 ESP32,release=1.0.1,device=M5Stack GSM Wardriver Rev1 ESP32,display=i2c LCD,board=M5Stack ESP32,brand=JHewitt");
+      Serial.println(  "Wigle     : WigleWifi-1.4,appRelease=1.0.1,model=M5Stack GSM Wardriver Rev1 ESP32,release=1.0.1,device=M5Stack GSM Wardriver Rev1 ESP32,display=i2c LCD,board=M5Stack ESP32,brand=JHewitt");
+      wigle_fh.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");
+      Serial.println(  "Wigle     : MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");        
+    }                      
   }
+
+  filepath="/opencid"+String(current_filename);
+  if(filepath.length()!=0) {
+    SD.mkdir(filepath.substring(0, 8));         // /opencid
+    SD.mkdir(filepath.substring(0,13));         // /opencid/yyyy
+    SD.mkdir(filepath.substring(0,20));         // /opencid/yyyy/yyyymm
+    newfile=!SD.exists(filepath);
+    opencid_fh = SD.open(filepath,FILE_APPEND); // /opencid/yyyy/yyyymm/yyyymmdd.csv
+    Serial.println(filepath);
+    if(newfile) {
+      opencid_fh.println("measured_at,devn,mcc,mnc,lac,bid,cid,signal,latitude,longitude,rating,act");
+      Serial.println(    "OpenCellID: measured_at,devn,mcc,mnc,lac,bid,cid,signal,latitude,longitude,rating,act");        
+    }                      
+  }
+
 }
 
 void setup() {
@@ -151,7 +210,10 @@ void loop() {
 
   // GPS data
   char   gps_timedate[20] = "";
-  char   gps_loc[50]      = "";
+  char   gps_lat[15]      = "";
+  char   gps_lng[15]      = "";
+  char   gps_alt[10]      = "";
+  char   gps_acc[10]      = "";
   char   gps_sat[25]      = "";
   float  accuracy         = 0;
   long   alt              = 0;
@@ -176,9 +238,11 @@ void loop() {
   int int_cellid          = 0;
   int int_arfcn           = 0;
   int int_lac             = 0;
+  int int_bsic            = 0;
   String mccmnc           = "";
   String wigle_cell_key   = "";
   String wigle            = "";
+  String opencid          = "";
 
   // timestamp in UTC  
   if (gps.date.isValid() && gps.time.isValid()) {
@@ -193,13 +257,9 @@ void loop() {
 
       if(lastdate != curdate) {
         if( lastdate != 0 ) {
-          fh.close();
+          wigle_fh.close();
         }
         openfile();
-        fh.println("WigleWifi-1.4,appRelease=1.0.0,model=M5Stack GSM Wardriver Rev1 ESP32,release=1.0.0,device=M5Stack GSM Wardriver Rev1 ESP32,display=i2c LCD,board=M5Stack ESP32,brand=JHewitt");
-        fh.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");
-        Serial.println("WigleWifi-1.4,appRelease=1.0.0,model=M5Stack GSM Wardriver Rev1 ESP32,release=1.0.0,device=M5Stack GSM Wardriver Rev1 ESP32,display=i2c LCD,board=M5Stack ESP32,brand=JHewitt");
-        Serial.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type");        
         lastdate=curdate;
       }
     }
@@ -209,7 +269,10 @@ void loop() {
     alt = gps.altitude.meters();
     accuracy = (float)gps.hdop.hdop() * 2.5;
     
-    sprintf(gps_loc,"%.7f,%.7f,%.2f,%.2f",gps.location.lat(),gps.location.lng(),alt,accuracy); 
+    sprintf(gps_lat,"%.7f",gps.location.lat()); 
+    sprintf(gps_lng,"%.7f",gps.location.lng()); 
+    sprintf(gps_alt,"%.2f",alt); 
+    sprintf(gps_acc,"%.2f",accuracy); 
     validfix=true;
   }
 
@@ -276,7 +339,7 @@ void loop() {
           if (startpos == -1) break;
           endpos=network.indexOf(",",startpos);
           if (endpos == -1) break;
-          String rxlev = network.substring(startpos,endpos);
+          rxlev = network.substring(startpos,endpos);
 
           searchfor="Cellid:";
           startpos=network.indexOf(searchfor,endpos)+searchfor.length();
@@ -311,6 +374,7 @@ void loop() {
           int_cellid     = strtol(cellid.c_str(), 0, 16);
           int_arfcn      = arfcn.toInt();
           int_lac        = strtol(lac.c_str(), 0, 16);
+          int_bsic       = strtol(bsic.c_str(), 0, 16);
           mccmnc         = mcc + mnc ;
           wigle_cell_key = mccmnc.substring(0,7) + "_" + String(int_lac) + "_"+ String(int_cellid);
           
@@ -327,15 +391,25 @@ void loop() {
           Serial.println();
           */
           if(validfix) {
-            if(celltowers.indexOf(wigle_cell_key+";") == -1) {
-              wigle = wigle_cell_key + "," + network_operator + ",GSM;" + mccmnc + "," + gps_timedate + "," + String(int_arfcn) + "," + String(int_rxlev) + "," + gps_loc + ",GSM";
-              Serial.println(wigle);
-              fh.println(wigle);
-              fh.flush();
-              celltowers.concat(wigle_cell_key+";");
+            if(celltowers.indexOf(";"+wigle_cell_key) == -1) {
+
+              //           MAC,                  SSID,                AuthMode,          FirstSeen,            Channel,                    RSSI,                 CurrentLatitude,         CurrentLongitude,        AltitudeMeters,       AccuracyMeters,     Type
+              wigle = wigle_cell_key + "," + network_operator + ",GSM;" + mccmnc + "," + String(gps_timedate) + "," + String(int_arfcn) + "," + String(int_rxlev) + "," + String(gps_lat) + "," + String(gps_lng) + "," + String(gps_alt) + "," + String(gps_acc) + ",GSM";              
+              Serial.println("Wigle     : "+wigle);
+              wigle_fh.println(wigle);
+              wigle_fh.flush();
+              uniq_fh.print(";"+wigle_cell_key);
+              uniq_fh.flush();
+              celltowers.concat(";"+wigle_cell_key);
               unique_celltowers++;
-              filesize=fh.size();
+              // filesize=fh.size();
             }
+            //              measured_at,            devn,                    mcc,        mnc,            lac,                bid,              cid,                      signal,                latitude,              longitude,                 rating,              act
+            opencid = "\"" + String(gps_timedate) + "\"," + network_operator + "," + mcc + "," + mnc + "," + String(int_lac) + "," + String(int_bsic) + "," + String(int_cellid) + "," + String(int_rxlev) + "," + String(gps_lat) + "," + String(gps_lng)  + "," + String(gps_acc) + "," + "GSM";
+            Serial.println("OpenCellID: "+opencid);
+            opencid_fh.println(opencid);
+            opencid_fh.flush();
+            total_celltowers++;
           }
           start=end+1;
         }
@@ -349,15 +423,17 @@ void loop() {
   M5.Lcd.drawCentreString(gps_timedate,160,1,4);
 
   M5.Lcd.fillRect(0, 240-26, 320, 26, TFT_BLUE);
-  M5.Lcd.drawCentreString("M5Stack GSM Wardriver R1",160,240-25,4);
+  M5.Lcd.drawCentreString("M5 GSM Wardriver - "+version,160,240-25,4);
 
   M5.Lcd.setTextColor(TFT_BLUE,TFT_BLACK);
   M5.Lcd.drawCentreString(gps_sat,160,40,4);
-  M5.Lcd.drawCentreString("Unique Celltowers",160,180,4);
+  M5.Lcd.drawCentreString("Unique Celltowers",160,165,4);
 
   M5.Lcd.setTextColor(TFT_WHITE,TFT_BLACK);
+  M5.Lcd.drawCentreString("Total: "+String(total_celltowers),160,190,4);
+
   M5.Lcd.setTextSize(3);
-  M5.Lcd.drawCentreString(String(unique_celltowers),160,100,4);
+  M5.Lcd.drawCentreString(String(unique_celltowers),160,85,4);
   // Serial.println(response); 
   }
 }
